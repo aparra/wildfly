@@ -47,7 +47,7 @@ public class BinderService implements Service<ManagedReferenceFactory> {
     protected final String name;
     protected final InjectedValue<ManagedReferenceFactory> managedReferenceFactory = new InjectedValue<ManagedReferenceFactory>();
     protected final Object source;
-    protected volatile ServiceController<?> controller;
+    protected ServiceController<?> controller;
 
     /**
      * Construct new instance.
@@ -79,7 +79,7 @@ public class BinderService implements Service<ManagedReferenceFactory> {
      * @param context The start context
      * @throws StartException If the entity can not be bound
      */
-    public void start(StartContext context) throws StartException {
+    public synchronized void start(StartContext context) throws StartException {
         controller = context.getController();
         final ServiceName serviceName = controller.getName();
         final ServiceBasedNamingStore namingStore = namingStoreValue.getValue();
@@ -92,20 +92,21 @@ public class BinderService implements Service<ManagedReferenceFactory> {
      *
      * @param context The stop context
      */
-    public void stop(StopContext context) {
-        final ServiceName serviceName = controller.getName();
+    public synchronized void stop(StopContext context) {
+        final ServiceName serviceName = context.getController().getName();
         final ServiceBasedNamingStore namingStore = namingStoreValue.getValue();
         namingStore.remove(serviceName);
         controller = null;
-        ROOT_LOGGER.tracef("Unbound resource %s into naming store %s (service name %s)", name, namingStore, serviceName);
+        ROOT_LOGGER.tracef("Unbound resource %s from naming store %s (service name %s)", name, namingStore, serviceName);
     }
 
     /**
      * Forces the binder service stop.
      */
-    public void stopNow() {
+    public synchronized void stopNow() {
         if (controller != null) {
             controller.setMode(ServiceController.Mode.REMOVE);
+            controller = null;
         }
     }
 

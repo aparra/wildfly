@@ -22,9 +22,15 @@
 package org.jboss.as.naming.deployment;
 
 import org.jboss.as.naming.logging.NamingLogger;
+import org.jboss.as.naming.service.NamingService;
 import org.jboss.as.naming.service.SharedBinderService;
+import org.jboss.as.server.deployment.DeploymentUnit;
+import org.jboss.as.server.deployment.DeploymentUnitProcessingException;
 import org.jboss.msc.service.Service;
+import org.jboss.msc.service.ServiceBuilder;
+import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
+import org.jboss.msc.service.ServiceTarget;
 import org.jboss.msc.service.StartContext;
 import org.jboss.msc.service.StartException;
 import org.jboss.msc.service.StopContext;
@@ -33,12 +39,42 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * A {@link Service} which on stop releases acquired {@link org.jboss.as.naming.service.SharedBinderService}s.
+ * A {@link Service} that manages the deployment's references with respect to bindings, which may be shared among deployments.
  *
  * @author Eduardo Martins
  *
  */
-public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseService.References> {
+public class SharedBindingReferencesService implements Service<SharedBindingReferencesService.References> {
+
+    /**
+     * Retrieves the name of service related with the specified deployment.
+     * @param deploymentUnitServiceName
+     * @return
+     */
+    public static ServiceName serviceName(final ServiceName deploymentUnitServiceName) {
+        return deploymentUnitServiceName.append("sharedBindings");
+    }
+
+    /**
+     * Installs a deployment's service.
+     * @param deploymentUnit
+     * @param serviceTarget
+     * @return
+     * @throws DeploymentUnitProcessingException
+     */
+    public static ServiceController<References> install(DeploymentUnit deploymentUnit, ServiceTarget serviceTarget) throws DeploymentUnitProcessingException {
+        final ServiceName serviceName = serviceName(deploymentUnit.getServiceName());
+        final List<SharedBinderService> sharedBinderServices = deploymentUnit.getAttachmentList(org.jboss.as.naming.deployment.Attachments.SHARED_BINDER_SERVICES);
+        final SharedBindingReferencesService service = new SharedBindingReferencesService(sharedBinderServices);
+        final ServiceBuilder<References> serviceBuilder = serviceTarget.addService(serviceName, service);
+        if (sharedBinderServices != null) {
+            for (SharedBinderService sharedBinderService : sharedBinderServices) {
+                serviceBuilder.addDependency(sharedBinderService.getServiceName());
+            }
+        }
+        serviceBuilder.addDependency(NamingService.SERVICE_NAME);
+        return serviceBuilder.install();
+    }
 
     /**
      * the shared binder services owned
@@ -50,11 +86,11 @@ public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseServ
      */
     private final List<SharedBinderService> servicesToAcquireOnStart;
 
-    public RuntimeBindReleaseService(List<SharedBinderService> servicesToAcquireOnStart) {
+    public SharedBindingReferencesService(List<SharedBinderService> servicesToAcquireOnStart) {
         this.servicesToAcquireOnStart = servicesToAcquireOnStart;
     }
 
-    public RuntimeBindReleaseService() {
+    public SharedBindingReferencesService() {
         this(null);
     }
 
@@ -73,18 +109,20 @@ public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseServ
         references.releaseAll();
     }
 
+    /**
+     * The shared binds referenced/owned by the deployment.
+     */
     public static class References {
 
         // List instead of Set because binder services use a counter to track its references, and a deployment may have multiple components acquiring same shared bind
-        private List<SharedBinderService.Owners> services;
+        private List<SharedBinderService> services;
 
         public synchronized void acquire(SharedBinderService service) {
             if (services == null) {
                 services = new ArrayList<>();
             }
-            SharedBinderService.Owners serviceOwners = service.getOwners();
-            serviceOwners.acquire();
-            services.add(serviceOwners);
+            service.acquire();
+            services.add(service);
         }
 
         public synchronized void acquireAll(List<SharedBinderService> servicesToAcquire) {
@@ -97,7 +135,7 @@ public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseServ
 
         public synchronized boolean contains(ServiceName serviceName) {
             if (services != null) {
-                for (SharedBinderService.Owners service : services) {
+                for (SharedBinderService service : services) {
                     if (serviceName.equals(service.getServiceName())) {
                         return true;
                     }
@@ -108,7 +146,7 @@ public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseServ
 
         public synchronized void releaseAll() {
             if (services != null) {
-                for (SharedBinderService.Owners service : services) {
+                for (SharedBinderService service : services) {
                     try {
                         service.release();
                     } catch (Throwable e) {
@@ -120,5 +158,4 @@ public class RuntimeBindReleaseService implements Service<RuntimeBindReleaseServ
         }
 
     }
-
 }

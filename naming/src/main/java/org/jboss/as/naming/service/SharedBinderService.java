@@ -22,10 +22,7 @@
 
 package org.jboss.as.naming.service;
 
-import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
-import org.jboss.msc.service.StartContext;
-import org.jboss.msc.service.StartException;
 import org.jboss.msc.service.StopContext;
 
 /**
@@ -42,45 +39,38 @@ public class SharedBinderService extends BinderService {
     private StopContext stopContext;
 
     /**
-     * the owners of the service
+     * accounts the number of owners
      */
-    private Owners owners = new Owners();
+    private int ownersCount = 0;
+
+    /**
+     * the bind's service name
+     */
+    private final ServiceName serviceName;
 
     /**
      *
      * @param name
      * @param source
      */
-    public SharedBinderService(final String name, Object source) {
+    public SharedBinderService(final String name, Object source, final ServiceName serviceName) {
         super(name, source);
+        this.serviceName = serviceName;
     }
 
     /**
-     *
-     * @param name
-     */
-    public SharedBinderService(final String name) {
-        this(name, null);
-    }
-
-    /**
-     * Retrieves the bind's owners
+     * Retrieves the binds' service name.
      * @return
      */
-    public Owners getOwners() {
-        return owners;
-    }
-
-    @Override
-    public synchronized void start(StartContext context) throws StartException {
-        super.start(context);
+    public ServiceName getServiceName() {
+        return serviceName;
     }
 
     @Override
     public synchronized void stop(StopContext context) {
-        if (!owners.isOwned()) {
+        if (!isOwned()) {
             // no owners, proceed with the service stop
-            proceedWithStop(context);
+            super.stop(context);
         } else {
             // there are still owners, suspend the service stop
             stopContext = context;
@@ -90,21 +80,34 @@ public class SharedBinderService extends BinderService {
 
     @Override
     public synchronized void stopNow() {
-        if (owners.isOwned()) {
-            owners.releaseAll();
-        } else {
-            noOwners();
+        ownersCount = 0;
+        noOwners();
+    }
+
+    /**
+     * Acquires ownership of the service.
+     */
+    public synchronized void acquire() {
+        ownersCount++;
+    }
+
+    /**
+     * Release ownership of the service.
+     */
+    public synchronized void release() {
+        if (isOwned()) {
+            ownersCount--;
+            if (!isOwned()) {
+                noOwners();
+            }
         }
     }
 
     /**
-     * Proceeds with the service stop.
-     * @param stopContext
+     * @return true if there is at least one owner
      */
-    private void proceedWithStop(StopContext stopContext) {
-        super.stop(stopContext);
-        // if service stop was forced then there may still be references to current owners instance, recreate it to allow clean service restart
-        owners = new Owners();
+    private boolean isOwned() {
+        return ownersCount > 0;
     }
 
     /**
@@ -113,64 +116,16 @@ public class SharedBinderService extends BinderService {
     private void noOwners() {
         if (stopContext != null) {
             // suspended stop, resume it
-            proceedWithStop(stopContext);
+            super.stop(stopContext);
             stopContext.complete();
             stopContext = null;
-        } else if (controller != null) {
-            // service is up, stop it
-            controller.setMode(ServiceController.Mode.REMOVE);
+        } else {
+            super.stopNow();
         }
     }
 
     @Override
     public String toString() {
-        return new StringBuilder("SharedBinderService[name=").append(name).append(", source=").append(source).append(", owners=").append(owners.ownersCount).append(']').toString();
-    }
-
-    /**
-     * The owner's of the service.
-     */
-    public class Owners {
-
-        private int ownersCount = 0;
-
-        public synchronized boolean isOwned() {
-            return ownersCount > 0;
-        }
-
-        public synchronized void acquire() {
-            ownersCount++;
-        }
-
-        /**
-         * An owner releases the binder service.
-         */
-        public synchronized void release() {
-            if (isOwned()) {
-                ownersCount--;
-                if (!isOwned()) {
-                    noOwners();
-                }
-            }
-        }
-
-        /**
-         * The binder service invalidates all ownerships.
-         */
-        private synchronized void releaseAll() {
-            if (isOwned()) {
-                ownersCount = 0;
-                noOwners();
-            }
-        }
-
-        /**
-         * Retrieves the service name of the binder service.
-         * @return
-         */
-        public ServiceName getServiceName() {
-            final ServiceController<?> serviceController = controller;
-            return serviceController != null ? serviceController.getName() : null;
-        }
+        return new StringBuilder("SharedBinderService[name=").append(name).append(", source=").append(source).append(", owners=").append(ownersCount).append(']').toString();
     }
 }
